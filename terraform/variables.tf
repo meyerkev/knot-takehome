@@ -21,3 +21,9 @@ variable "docker_image" {
   description = "Docker image to run"
   type        = string
 }
+
+variable "ecr_repository_url" {
+  description = "ECR repository URL"
+  type        = string
+  default     = "386145735201.dkr.ecr.us-east-2.amazonaws.com/knot-takehome"
+}
