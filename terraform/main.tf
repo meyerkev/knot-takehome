@@ -1,5 +1,39 @@
 locals {
   availability_zones = ["${var.region}a", "${var.region}b", "${var.region}c"]
+  
+  user_data = <<-EOF
+              #!/bin/bash
+              echo "Starting setup" >> /tmp/setup.log
+              echo $(whoami) >> /tmp/setup.log
+              apt-get update && apt-get upgrade -y
+              echo "apt-get update and upgrade complete" >> /tmp/setup.log
+              apt-get install -y docker.io unzip
+              echo "docker.io and unzip installed" >> /tmp/setup.log
+              systemctl enable docker
+              systemctl start docker
+              echo "docker.io started" >> /tmp/setup.log
+              usermod -aG docker ubuntu
+              echo "Adding user to docker group" >> /tmp/setup.log
+              # Install awscli
+              echo "Installing awscli" >> /tmp/setup.log
+              apt-get install -y curl ca-certificates
+              curl "https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip" -o "awscliv2.zip"
+              unzip awscliv2.zip
+              ./aws/install || .aws/install --update
+              rm awscliv2.zip
+              rm -rf aws
+              echo "awscli setup complete" >> /tmp/setup.log
+
+              # Set up ECR_REPO_URL
+              echo "ECR_REPO_URL=${var.ecr_repository_url}" >> /etc/environment
+              
+              # Login to ECR
+              aws ecr get-login-password --region ${var.region} | docker login --username AWS --password-stdin ${var.ecr_repository_url}
+              
+              # Pull and run the container
+              docker run -d -p 80:8000 ${var.docker_image}
+              echo "container started" >> /tmp/setup.log
+              EOF
 }
 
 # Generate a new private key
@@ -52,7 +86,9 @@ resource "aws_iam_role_policy" "ecr_read_policy" {
           "ecr:DescribeImages",
           "ecr:BatchGetImage"
         ]
-        Resource = [aws_ecr_repository.knot_takehome.arn]
+        Resource = [
+          "arn:aws:ecr:${var.region}:386145735201:repository/knot-takehome"
+        ]
       },
       {
         Effect = "Allow"
@@ -143,13 +179,14 @@ resource "aws_instance" "web" {
   key_name  = aws_key_pair.generated.key_name
   iam_instance_profile = aws_iam_instance_profile.ec2_profile.name
 
-  user_data = <<-EOF
-              #!/bin/bash
-              apt-get update
-              apt-get install -y docker.io
-              systemctl enable docker
-              systemctl start docker
-              usermod -aG docker ubuntu
-              docker run -d -p 80:8000 ${var.docker_image}
-              EOF
+  user_data = local.user_data
+
+  lifecycle {
+    replace_triggered_by = [terraform_data.user_data_tracker.output]
+  }
+}
+
+# This resource helps track user_data changes
+resource "terraform_data" "user_data_tracker" {
+  input = sha256(local.user_data)
 }
